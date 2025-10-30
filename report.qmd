@@ -6,30 +6,199 @@ format: typst
 # Example Solution 1
 
 ## **Part 0: libraries**
-edits 
 
 ```{r}
-
+library(readr)
+library(dplyr)
+library(tidyr)
+library(stringr)
+library(ggplot2)
+library(maps)
 ```
 
 ## **Part 1:** **Defining Research Question**
 
-Chosen Question:
+Overview: Introducing Sub Questions 
+1. Energy Price vs. Renewable Share:
+Are states with cheaper electricity more or less renewable-powered?
+
+2.EV Adoption vs. Clean Energy:
+Are electric vehicles more common in states with cleaner (more renewable) energy mixes?
+
+3. Renewable Growth Over Time:
+Which states have seen the fastest growth in renewable energy use from 2021 to 2023?
+
+Chosen question for graph: Are states with cheaper electricity more or less renewable-powered?
 
 ## **Part 2: Data Preparation and Cleaning**
 
+Cleaning the Renew CSVs
 ```{r}
+clean_renew <- function(df, year_col) {
+  df %>%
+    rename_with(~ c("state", "energy_source", "value"), everything()) %>%
+    mutate(year = year_col,
+           value = as.numeric(str_replace_all(value, "[^0-9\\.]", ""))) %>%
+    group_by(state, year) %>%
+    summarise(renewable_energy_use = sum(value, na.rm = TRUE), .groups = "drop")
+}
 
+renew_all <- bind_rows(
+  clean_renew(renew_use_2021, 2021),
+  clean_renew(renew_use_2022, 2022),
+  clean_renew(renew_use_2023, 2023)
+)
+
+head(renew_all)
+```
+
+Cleaning the Total CSVs
+```{r}
+clean_total <- function(df, year_col) {
+  df %>%
+    pivot_longer(-Energy_Source, names_to = "state", values_to = "value") %>%
+    group_by(state) %>%
+    summarise(total_energy_use = sum(value, na.rm = TRUE), .groups = "drop") %>%
+    mutate(year = year_col)
+}
+
+total_all <- bind_rows(
+  clean_total(total_use_2021, 2021),
+  clean_total(total_use_2022, 2022),
+  clean_total(total_use_2023, 2023)
+)
+
+head(total_all)
+```
+
+Cleaning the EV Registrations 
+```{r}
+ev_clean <- ev_registrations_by_state_2023 %>%
+  rename(
+    state = `electric vehicle registrations_by_state (2023)`,
+    ev_registrations = `...2`
+  ) %>%
+  mutate(
+    ev_registrations = as.numeric(str_replace_all(ev_registrations, "[^0-9]", ""))
+  )
+
+head(ev_clean)
+```
+
+Cleaning the Prices 
+```{r}
+price_clean <- read_csv("Downloads/av-energy-price-2021-2023.csv", col_names = FALSE, skip = 2) %>%
+  separate(X1, into = c("state", "p2021", "p2022", "p2023"), sep = ",", fill = "right", extra = "merge") %>%
+  filter(!str_detect(state, "State|Total|US"), !is.na(p2021)) %>%
+  mutate(across(c(p2021, p2022, p2023), ~as.numeric(str_extract(., "[0-9]+\\.?[0-9]*")))) %>%
+  pivot_longer(cols = starts_with("p"), names_to = "year", values_to = "average_price") %>%
+  mutate(year = as.numeric(str_remove(year, "p"))) %>%
+  arrange(state, year)
+
+head(price_clean)
 ```
 
 ## **Part 3: Joining / Pivoting Datasets for Analysis**
+Question 1: Are states with cheaper electricity more or less renewable-powered?
+
+I joined the renewable energy, total energy use, and average energy price datasets by state and year. This allowed me to calculate the renewable energy share as: renewable_share = renewable_energy_use / total_energy_use
+This variable represents the percentage of each state’s total energy use that comes from renewable sources. I used this combined table to compare average_price against renewable_share across years.
 
 ```{r}
+energy_joined <- renew_all %>%
+  left_join(total_all, by = c("state", "year")) %>%
+  left_join(price_clean, by = c("state", "year")) %>%
+  mutate(renewable_share = renewable_energy_use / total_energy_use)
+
+energy_joined
+```
+
+Question 2: Are electric vehicles more common in states with cleaner energy mixes?
+
+For this question, I merged the 2023 renewable and total energy tables with the EV registrations dataset using the state column. This allowed me to compute the EV density relative to total energy use or renewable share.
+
+The new variable is:
+ev_ratio = ev_registrations / total_energy_use
+
+```{r}
+ev_combined <- renew_all %>%
+  filter(year == 2023) %>%
+  left_join(total_all %>% filter(year == 2023), by = "state") %>%
+  left_join(ev_clean, by = "state") %>%
+  mutate(ev_ratio = ev_registrations / total_energy_use)
+
+ev_combined
+```
+
+Question 3: Which states have seen the fastest growth in renewable energy use from 2021 to 2023?
+
+To measure growth, I combined all three years of renewable energy data into a single long table (renew_all) and grouped by state. Then I computed each state’s percentage change in renewable energy use from 2021 to 2023.
+
+The new variable is:
+renewable_growth = (renewable_use_2023 - renewable_use_2021) / renewable_use_2021
+
+```{r}
+renew_growth <- renew_all %>%
+  pivot_wider(names_from = year, values_from = renewable_energy_use) %>%
+  mutate(renewable_growth = (`2023` - `2021`) / `2021`)
+
+renew_growth
 
 ```
+```{r}
+energy_joined <- energy_joined %>%
+  mutate(state = case_when(
+    state %in% state.abb ~ tolower(state.name[match(state, state.abb)]),
+    TRUE ~ tolower(state)
+  ))
+```
+
+```{r}
+energy_joined <- renew_all %>%
+  left_join(total_all, by = c("state", "year")) %>%
+  left_join(price_clean, by = c("state", "year")) %>%
+  mutate(
+    renewable_share = renewable_energy_use / total_energy_use
+  )
+
+```
+
+```{r}
+distinct(energy_joined, state) %>% head(10)
+```
+
+```{r}
+energy_joined <- energy_joined %>%
+  mutate(
+    state = case_when(
+      state %in% state.abb ~ tolower(state.name[match(state, state.abb)]),
+      TRUE ~ tolower(state)
+    )
+  )
+```
+
+```{r}
+distinct(energy_joined, state) %>% head(10)
+```
+
 
 ## **Part 4: Mapping Visualization**
 
 ```{r}
+states_map <- map_data("state")
+
+map_data_2023 <- energy_joined %>% filter(year == 2023)
+
+map_joined <- left_join(states_map, map_data_2023, by = c("region" = "state"))
+
+ggplot(map_joined, aes(long, lat, group = group, fill = renewable_share)) +
+  geom_polygon(color = "white") +
+  scale_fill_viridis_c(option = "plasma", name = "Renewable Share") +
+  labs(
+    title = "Renewable Energy Share by State (2023)",
+    subtitle = "Comparing renewable share and electricity prices",
+    caption = "Data: EIA, DOE"
+  ) +
+  theme_bw()
 
 ```
